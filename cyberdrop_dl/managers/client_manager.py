@@ -19,6 +19,7 @@ from cyberdrop_dl.clients.download_client import DownloadClient
 from cyberdrop_dl.clients.flaresolverr import FlareSolverr
 from cyberdrop_dl.clients.response import AbstractResponse
 from cyberdrop_dl.clients.scraper_client import ScraperClient
+from cyberdrop_dl.clients.stealth_browser import StealthBrowser
 from cyberdrop_dl.data_structures.url_objects import AbsoluteHttpURL, MediaItem
 from cyberdrop_dl.exceptions import DDOSGuardError, DownloadError, ScrapeError, TooManyCrawlerErrors
 from cyberdrop_dl.ui.prompts.user_prompts import get_cookies_from_browsers
@@ -136,6 +137,7 @@ class ClientManager:
         self.speed_limiter = DownloadSpeedLimiter(self.rate_limiting_options.download_speed_limit)
         self.download_client = DownloadClient(manager, self)
         self.flaresolverr = FlareSolverr(manager)
+        self.stealth_browser = StealthBrowser(headless=True)
         self.file_locks: WeakAsyncLocks[str] = WeakAsyncLocks()
 
         self._session: aiohttp.ClientSession
@@ -450,6 +452,7 @@ class ClientManager:
 
     async def close(self) -> None:
         await self.flaresolverr.close()
+        await self.stealth_browser.close()
 
 
 async def _set_dns_resolver(loop: asyncio.AbstractEventLoop | None = None) -> None:

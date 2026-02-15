@@ -78,6 +78,17 @@ class AbstractResponse:
             _text=solution.content,
         )
 
+    @classmethod
+    def from_html(cls, html: str, url: AbsoluteHttpURL) -> Self:
+        return cls(
+            content_type="text/html",
+            status=200,
+            headers=CIMultiDictProxy(CIMultiDict()),
+            url=url,
+            location=None,
+            _text=html,
+        )
+
     @staticmethod
     def parse_headers(url: AbsoluteHttpURL, headers: CIMultiDictProxy[str]) -> tuple[str, AbsoluteHttpURL | None]:
         if location := headers.get("location"):

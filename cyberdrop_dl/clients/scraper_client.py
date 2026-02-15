@@ -134,8 +134,17 @@ class ScraperClient:
             await self.client_manager.check_http_status(abs_resp)
             return abs_resp
         except DDOSGuardError:
-            flare_solution = await self.client_manager.flaresolverr.request(url, data)
-            return AbstractResponse.from_flaresolverr(flare_solution)
+            try:
+                flare_solution = await self.client_manager.flaresolverr.request(url, data)
+                return AbstractResponse.from_flaresolverr(flare_solution)
+            except Exception:
+                # Fallback to StealthBrowser
+                from cyberdrop_dl.utils.logger import log
+                log(f"Flaresolverr failed for {url}, activating Stealth Browser FallbackProtocol...", 30)
+
+                # Get content
+                content = await self.client_manager.stealth_browser.get_page_content(str(url))
+                return AbstractResponse.from_html(content, url)
 
     async def write_soup_to_disk(self, url: AbsoluteHttpURL, response: AbstractResponse, exc: Exception | None = None):
         """Writes html to a file."""
