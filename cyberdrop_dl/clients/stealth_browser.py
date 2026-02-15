@@ -6,7 +6,7 @@ from contextlib import asynccontextmanager
 from typing import TYPE_CHECKING, Any
 
 from playwright.async_api import BrowserContext, Page, async_playwright
-from playwright_stealth import stealth_async
+from playwright_stealth import Stealth
 
 from cyberdrop_dl.utils.logger import log
 
@@ -59,7 +59,8 @@ class StealthBrowser:
             )
             
             # Apply stealth scripts to the context
-            await stealth_async(self._context)
+            # We use the Stealth class directly as per inspection
+            await Stealth().apply_stealth_async(self._context)
             log("Stealth Browser Initialized.", 20)
 
     async def close(self):
@@ -110,15 +111,54 @@ class StealthBrowser:
             await page.close()
 
     async def get_page_content(self, url: str) -> str:
-        """Returns the full HTML content after JS execution."""
-        await self._ensure_browser()
-        assert self._context
-        
-        page = await self._context.new_page()
-        try:
-            await page.goto(url, timeout=60000, wait_until="networkidle")
-            await page.wait_for_timeout(2000)
-            content = await page.content()
-            return content
-        finally:
-            await page.close()
+        """
+        Navigates to a URL and returns the page content (HTML).
+        Uses a lock to ensure only one page is active at a time in this context.
+        """
+        async with self._lock:
+            await self._ensure_browser()
+
+            page = await self._context.new_page()
+            try:
+                log(f"Stealth Browser navigating to: {url}", 20)
+                await page.goto(url, wait_until="domcontentloaded", timeout=60000)
+                
+                # Random wait to mimic human behavior
+                await page.wait_for_timeout(2000)
+                
+                content = await page.content()
+                return content
+            except Exception as e:
+                log(f"Stealth Browser error fetching {url}: {e}", 40)
+                raise
+            finally:
+                await page.close()
+
+    async def get_attribute(self, url: str, selector: str, attribute: str) -> str | None:
+        """
+        Navigates to a URL and returns the value of an attribute for a given selector.
+        Useful for extracting src from video tags or href from download buttons.
+        """
+        async with self._lock:
+            await self._ensure_browser()
+
+            page = await self._context.new_page()
+            try:
+                log(f"Stealth Browser extracting attribute '{attribute}' from '{selector}' on: {url}", 20)
+                await page.goto(url, wait_until="domcontentloaded", timeout=60000)
+                
+                # Wait for the element to appear
+                try:
+                    await page.wait_for_selector(selector, timeout=10000)
+                except Exception:
+                    log(f"Selector '{selector}' not found on {url}", 30)
+                    return None
+
+                element = page.locator(selector).first
+                value = await element.get_attribute(attribute)
+                return value
+            except Exception as e:
+                log(f"Stealth Browser error extracting attribute from {url}: {e}", 40)
+                return None
+            finally:
+                await page.close()

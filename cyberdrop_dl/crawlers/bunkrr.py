@@ -16,6 +16,7 @@ from cyberdrop_dl.data_structures.url_objects import AbsoluteHttpURL
 from cyberdrop_dl.exceptions import DDOSGuardError
 from cyberdrop_dl.utils import aio, css, open_graph
 from cyberdrop_dl.utils.utilities import error_handling_wrapper, parse_url, xor_decrypt
+from cyberdrop_dl.utils.logger import log
 
 if TYPE_CHECKING:
     from collections.abc import Callable, Generator
@@ -193,7 +194,7 @@ class BunkrrCrawler(Crawler):
         else:
             dl_link = css.select(soup, Selector.DOWNLOAD_BUTTON, "href")
             file_id = self.parse_url(dl_link).name
-            src = await self._request_download(file_id)
+            src = await self._request_download(file_id, page_url=self.parse_url(dl_link))
 
         name = open_graph.title(soup)  # See: https://github.com/jbsparrow/CyberDropDownloader/issues/929
         await self._direct_file(scrape_item, src, name)
@@ -202,7 +203,7 @@ class BunkrrCrawler(Crawler):
     async def reinforced_file(self, scrape_item: ScrapeItem, file_id: str) -> None:
         soup = await self.request_soup(scrape_item.url)
         name = css.select_text(soup, "h1")
-        src = await self._request_download(file_id)
+        src = await self._request_download(file_id, page_url=scrape_item.url)
         await self._direct_file(scrape_item, src, name)
 
     @error_handling_wrapper
@@ -218,7 +219,30 @@ class BunkrrCrawler(Crawler):
             scrape_item.url = _REINFORCED_URL
         await self.handle_file(link, scrape_item, name, ext, custom_filename=filename)
 
-    async def _request_download(self, file_id: str) -> AbsoluteHttpURL:
+    async def _request_download(self, file_id: str, page_url: AbsoluteHttpURL | None = None) -> AbsoluteHttpURL:
+        # Fallback to Stealth Browser if URL provided
+        if page_url:
+            try:
+                stealth_browser = self.client.client_manager.stealth_browser
+                log(f"Attempting Stealth Browser extraction for {page_url}", 20)
+                
+                # Try getting video src first (most direct)
+                video_src = await stealth_browser.get_attribute(str(page_url), "video", "src")
+                if video_src:
+                    log(f"Found video src via Stealth Browser: {video_src}", 20)
+                    return self.parse_url(video_src)
+                
+                # Try getting download button href
+                dl_href = await stealth_browser.get_attribute(str(page_url), Selector.DOWNLOAD_BUTTON, "href")
+                if dl_href:
+                    log(f"Found download href via Stealth Browser: {dl_href}", 20)
+                    return self.parse_url(dl_href)
+                
+                log(f"Stealth Browser could not find video or download link on {page_url}, falling back to API", 20)
+            except Exception as e:
+                log(f"Stealth Browser fallback failed: {e}, using API", 30)
+
+        # Legacy API Logic
         resp: dict[str, Any] = await self.request_json(
             _DOWNLOAD_API_ENTRYPOINT,
             "POST",
