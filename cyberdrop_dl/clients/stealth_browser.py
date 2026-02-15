@@ -47,21 +47,33 @@ class StealthBrowser:
                 args=[
                     "--disable-blink-features=AutomationControlled",
                     "--no-sandbox",
-                    "--disable-infobars"
+                    "--disable-infobars",
+                    "--disable-dev-shm-usage",
+                    "--disable-gpu", # Often mandatory for headless stability, but WebGL might suffer
+                    "--use-gl=angle",
+                    "--use-gl=egl"
                 ]
             )
             
             self._context = await self._browser.new_context(
-                # Emulate a real desktop browser
-                user_agent="Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/121.0.0.0 Safari/537.36",
+                # Emulate a real desktop browser - Modern Chrome 132+
+                user_agent="Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/132.0.0.0 Safari/537.36",
                 viewport={"width": 1920, "height": 1080},
                 locale="en-US",
+                timezone_id="Europe/Istanbul",
             )
             
+            # Additional manual evasion for navigator.webdriver
+            await self._context.add_init_script("""
+                Object.defineProperty(navigator, 'webdriver', { get: () => undefined });
+                window.chrome = { runtime: {} };
+                Object.defineProperty(navigator, 'plugins', { get: () => [1, 2, 3, 4, 5] });
+                Object.defineProperty(navigator, 'languages', { get: () => ['tr-TR', 'tr', 'en-US', 'en'] });
+            """)
+
             # Apply stealth scripts to the context
-            # We use the Stealth class directly as per inspection
             await Stealth().apply_stealth_async(self._context)
-            log("Stealth Browser Initialized.", 20)
+            log("Stealth Browser Initialized with enhanced evasions.", 20)
 
     async def close(self):
         """Closes the browser instance."""
@@ -82,42 +94,39 @@ class StealthBrowser:
         This dictionary can be fed into aiohttp or simplecookie.
         """
         await self._ensure_browser()
-        assert self._context
-        
-        page = await self._context.new_page()
-        try:
-            log(f"Stealth Browser Navigating to: {url}", 20)
-            # Timeout 60s for Cloudflare challenges
-            await page.goto(url, timeout=60000, wait_until="domcontentloaded")
-            
-            if wait_selector:
-                try:
-                    await page.wait_for_selector(wait_selector, timeout=30000)
-                except Exception:
-                    log(f"Timeout waiting for selector: {wait_selector}", 30)
+        async with self._lock:
+            assert self._context
+            page = await self._context.new_page()
+            try:
+                log(f"Stealth Browser Navigating to: {url}", 20)
+                await page.goto(url, timeout=60000, wait_until="domcontentloaded")
+                
+                if wait_selector:
+                    try:
+                        await page.wait_for_selector(wait_selector, timeout=30000)
+                    except Exception:
+                        log(f"Timeout waiting for selector: {wait_selector}", 30)
 
-            # Wait a bit for JS execution / Challenge solving
-            await page.wait_for_timeout(5000)
-            
-            cookies = await self._context.cookies(url)
-            cookie_dict = {c['name']: c['value'] for c in cookies}
-            log(f"Extracted {len(cookie_dict)} cookies from {url}", 20)
-            return cookie_dict
-            
-        except Exception as e:
-            log(f"Stealth Browser Error on {url}: {e}", 40)
-            raise
-        finally:
-            await page.close()
+                await page.wait_for_timeout(5000)
+                
+                cookies = await self._context.cookies(url)
+                cookie_dict = {c['name']: c['value'] for c in cookies}
+                log(f"Extracted {len(cookie_dict)} cookies from {url}", 20)
+                return cookie_dict
+                
+            except Exception as e:
+                log(f"Stealth Browser Error on {url}: {e}", 40)
+                raise
+            finally:
+                await page.close()
 
     async def get_page_content(self, url: str) -> str:
         """
         Navigates to a URL and returns the page content (HTML).
         Uses a lock to ensure only one page is active at a time in this context.
         """
+        await self._ensure_browser()
         async with self._lock:
-            await self._ensure_browser()
-
             page = await self._context.new_page()
             try:
                 log(f"Stealth Browser navigating to: {url}", 20)
@@ -139,9 +148,8 @@ class StealthBrowser:
         Navigates to a URL and returns the value of an attribute for a given selector.
         Useful for extracting src from video tags or href from download buttons.
         """
+        await self._ensure_browser()
         async with self._lock:
-            await self._ensure_browser()
-
             page = await self._context.new_page()
             try:
                 log(f"Stealth Browser extracting attribute '{attribute}' from '{selector}' on: {url}", 20)
@@ -160,5 +168,25 @@ class StealthBrowser:
             except Exception as e:
                 log(f"Stealth Browser error extracting attribute from {url}: {e}", 40)
                 return None
+            finally:
+                await page.close()
+
+    async def take_screenshot(self, url: str, path: str) -> None:
+        """
+        Navigates to a URL and takes a full page screenshot.
+        """
+        await self._ensure_browser()
+        async with self._lock:
+            page = await self._context.new_page()
+            try:
+                log(f"Stealth Browser taking screenshot of: {url}", 20)
+                # Use domcontentloaded + manual wait instead of networkidle to avoid hangs
+                await page.goto(url, wait_until="domcontentloaded", timeout=60000)
+                await page.wait_for_timeout(10000) # Give 10s for the challenge to settle
+                await page.screenshot(path=path, full_page=True)
+                log(f"Screenshot saved to {path}", 20)
+            except Exception as e:
+                log(f"Stealth Browser screenshot error for {url}: {e}", 40)
+                raise
             finally:
                 await page.close()

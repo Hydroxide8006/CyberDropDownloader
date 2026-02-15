@@ -26,7 +26,7 @@ if TYPE_CHECKING:
     from cyberdrop_dl.data_structures.url_objects import ScrapeItem
 
 
-_DOWNLOAD_API_ENTRYPOINT = AbsoluteHttpURL("https://apidl.bunkr.ru/api/_001_v2")
+_DOWNLOAD_API_ENTRYPOINT = AbsoluteHttpURL("https://bunkr.cr/api/vs")
 _REINFORCED_URL = AbsoluteHttpURL("https://get.bunkrr.su")
 
 
@@ -193,8 +193,9 @@ class BunkrrCrawler(Crawler):
 
         else:
             dl_link = css.select(soup, Selector.DOWNLOAD_BUTTON, "href")
-            file_id = self.parse_url(dl_link).name
-            src = await self._request_download(file_id, page_url=self.parse_url(dl_link))
+            # The new API expects a slug, not the numeric file ID
+            slug = scrape_item.url.parts[-1]
+            src = await self._request_download(slug, page_url=self.parse_url(dl_link))
 
         name = open_graph.title(soup)  # See: https://github.com/jbsparrow/CyberDropDownloader/issues/929
         await self._direct_file(scrape_item, src, name)
@@ -203,6 +204,8 @@ class BunkrrCrawler(Crawler):
     async def reinforced_file(self, scrape_item: ScrapeItem, file_id: str) -> None:
         soup = await self.request_soup(scrape_item.url)
         name = css.select_text(soup, "h1")
+        # For reinforced files, we might need a different approach if they don't have a slug
+        # But usually, it's better to try to extract it from the page or use ID if API allows
         src = await self._request_download(file_id, page_url=scrape_item.url)
         await self._direct_file(scrape_item, src, name)
 
@@ -219,7 +222,7 @@ class BunkrrCrawler(Crawler):
             scrape_item.url = _REINFORCED_URL
         await self.handle_file(link, scrape_item, name, ext, custom_filename=filename)
 
-    async def _request_download(self, file_id: str, page_url: AbsoluteHttpURL | None = None) -> AbsoluteHttpURL:
+    async def _request_download(self, identifier: str, page_url: AbsoluteHttpURL | None = None) -> AbsoluteHttpURL:
         # Fallback to Stealth Browser if URL provided
         if page_url:
             try:
@@ -242,11 +245,20 @@ class BunkrrCrawler(Crawler):
             except Exception as e:
                 log(f"Stealth Browser fallback failed: {e}, using API", 30)
 
-        # Legacy API Logic
+        # Determine the correct API endpoint and payload
+        if identifier.isdigit():
+            # Numeric ID uses the old apidl endpoint
+            api_endpoint = AbsoluteHttpURL("https://apidl.bunkr.ru/api/_001_v2")
+            payload = {"id": identifier}
+        else:
+            # Slug uses the new bunkr.cr endpoint (verified working)
+            api_endpoint = _DOWNLOAD_API_ENTRYPOINT
+            payload = {"slug": identifier}
+        
         resp: dict[str, Any] = await self.request_json(
-            _DOWNLOAD_API_ENTRYPOINT,
+            api_endpoint,
             "POST",
-            json={"id": file_id},
+            json=payload,
             headers={"Referer": str(_REINFORCED_URL)},
         )
         return self.parse_url(ApiResponse(**resp).decrypt())
